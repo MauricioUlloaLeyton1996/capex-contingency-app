@@ -140,6 +140,53 @@ function coverage(items: CostItem[], kind: CostKind) {
   return total ? (modeled / total) * 100 : 0;
 }
 
+function summarizeByKind(items: CostItem[]) {
+  return items.reduce((acc, item) => {
+    const current = acc.get(item.kind) ?? { total: 0, modeled: 0 };
+    current.total += item.base;
+    if (item.modeled) current.modeled += item.base;
+    acc.set(item.kind, current);
+    return acc;
+  }, new Map<CostKind, { total: number; modeled: number }>());
+}
+
+function buildCoverageSummary(items: CostItem[]) {
+  const totals = summarizeByKind(items);
+  const direct = totals.get('Directo') ?? { total: 0, modeled: 0 };
+  const indirect = totals.get('Indirecto') ?? { total: 0, modeled: 0 };
+
+  return {
+    direct: direct.total ? (direct.modeled / direct.total) * 100 : 0,
+    indirect: indirect.total ? (indirect.modeled / indirect.total) * 100 : 0,
+  };
+}
+
+function buildEffectiveItems(items: CostItem[]) {
+  const modeledTotals = new Map<CostKind, { base: number; optimistic: number; pessimistic: number }>();
+
+  for (const item of items) {
+    if (!item.modeled) continue;
+    const current = modeledTotals.get(item.kind) ?? { base: 0, optimistic: 0, pessimistic: 0 };
+    current.base += item.base;
+    current.optimistic += item.optimistic;
+    current.pessimistic += item.pessimistic;
+    modeledTotals.set(item.kind, current);
+  }
+
+  return items.map((item) => {
+    if (!item.aggregate || item.modeled) return item;
+    const peers = modeledTotals.get(item.kind);
+    if (!peers || peers.base === 0) return item;
+    const optimisticRatio = peers.optimistic / peers.base;
+    const pessimisticRatio = peers.pessimistic / peers.base;
+    return {
+      ...item,
+      optimistic: item.base * optimisticRatio,
+      pessimistic: item.base * pessimisticRatio,
+    };
+  });
+}
+
 function CumulativeChart({ result }: { result: SimulationResult }) {
   const width = 820;
   const height = 250;
@@ -192,15 +239,7 @@ export default function Home() {
   const [dirty, setDirty] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
 
-  const effectiveItems = useMemo(() => items.map((item) => {
-    if (!item.aggregate || item.modeled) return item;
-    const peers = items.filter((peer) => peer.kind === item.kind && peer.modeled && peer.base > 0);
-    const peerBase = peers.reduce((sum, peer) => sum + peer.base, 0);
-    if (!peerBase) return item;
-    const optimisticRatio = peers.reduce((sum, peer) => sum + peer.optimistic, 0) / peerBase;
-    const pessimisticRatio = peers.reduce((sum, peer) => sum + peer.pessimistic, 0) / peerBase;
-    return { ...item, optimistic: item.base * optimisticRatio, pessimistic: item.base * pessimisticRatio };
-  }), [items]);
+  const effectiveItems = useMemo(() => buildEffectiveItems(items), [items]);
 
   useEffect(() => {
     type ModelContext = {
@@ -239,8 +278,9 @@ export default function Home() {
     return () => lifecycle.abort();
   }, [effectiveItems]);
 
-  const directCoverage = coverage(items, 'Directo');
-  const indirectCoverage = coverage(items, 'Indirecto');
+  const coverageSummary = useMemo(() => buildCoverageSummary(items), [items]);
+  const directCoverage = coverageSummary.direct;
+  const indirectCoverage = coverageSummary.indirect;
   const contingency50 = ((result.p50 - result.base) / result.base) * 100;
   const contingency90 = ((result.p90 - result.base) / result.base) * 100;
 
