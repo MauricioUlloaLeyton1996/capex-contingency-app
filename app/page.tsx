@@ -256,11 +256,11 @@ export default function Home() {
 
   const runSimulation = () => {
     setIsRunning(true);
-    window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
       setResult(simulate(effectiveItems));
       setDirty(false);
       setIsRunning(false);
-    }, 320);
+    });
   };
 
   const resetModel = () => {
